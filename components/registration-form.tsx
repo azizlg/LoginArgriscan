@@ -89,7 +89,7 @@ export function RegistrationForm({ onNext, onUserData, onToggleLogin }: Registra
         email: formData.email,
         password: formData.password,
         options: {
-          emailRedirectTo: "http://localhost:3000/auth/callback",
+          emailRedirectTo: `${process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL || window.location.origin}/auth/callback`,
         },
       })
 
