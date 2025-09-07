@@ -36,9 +36,27 @@ export default function AuthCallbackPage() {
           })
         }
 
+        // Support code-based flows (OAuth or email confirmation via code)
+        const code = params.get("code")
+        const next = params.get("next") || "/dashboard"
+        if (code) {
+          setStatus("Exchanging code for session...")
+          const { data, error } = await supabase.auth.exchangeCodeForSession(code)
+          if (error) {
+            console.error("[auth/callback] exchangeCodeForSession error:", error)
+            setError(error.message || JSON.stringify(error))
+            setStatus("Failed to exchange code")
+            return
+          }
+          console.log("[auth/callback] Code exchanged, redirecting", data)
+          // Clean URL
+          window.history.replaceState({}, document.title, window.location.pathname)
+          router.replace(next)
+          return
+        }
+
         const accessToken = params.get("access_token")
         const refreshToken = params.get("refresh_token")
-        const rawToken = params.get("token")
 
         if (accessToken) {
           setStatus("Setting session from fragment tokens...")
@@ -58,12 +76,37 @@ export default function AuthCallbackPage() {
           return
         }
 
-        if (rawToken) {
-          setStatus("Verifying token with server...")
-          // Call server verify (we already have server callback route that handles verify), so just redirect to server route with token as query param
-          // This will trigger server-side verify logic added earlier.
-          const redirectUrl = `/auth/callback?token=${encodeURIComponent(rawToken)}&type=email`
-          window.location.replace(redirectUrl)
+        // Handle token_hash + type flow used by Supabase email confirmations
+        const tokenHash = params.get("token_hash") || params.get("token")
+        const rawType = (params.get("type") || "").toLowerCase()
+        if (tokenHash && rawType) {
+          setStatus("Verifying email token...")
+          // Map known types; default to 'email' if unknown
+          const allowedTypes = [
+            "signup",
+            "magiclink",
+            "recovery",
+            "invite",
+            "email",
+            "email_change",
+          ] as const
+          const type = (allowedTypes.includes(rawType as any) ? rawType : "email") as (typeof allowedTypes)[number]
+
+          const { data, error } = await supabase.auth.verifyOtp({
+            token_hash: tokenHash,
+            type: type as any,
+          })
+
+          if (error) {
+            console.error("[auth/callback] verifyOtp error:", error)
+            setError(error.message || JSON.stringify(error))
+            setStatus("Failed to verify token")
+            return
+          }
+
+          console.log("[auth/callback] verifyOtp success, redirecting", data)
+          window.history.replaceState({}, document.title, window.location.pathname)
+          router.replace("/dashboard")
           return
         }
 
