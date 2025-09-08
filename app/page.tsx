@@ -8,6 +8,7 @@ import { TokenCreation } from "@/components/token-creation"
 import { AgriScanTesting } from "@/components/agriscan-testing"
 import { PaymentForm } from "@/components/payment-form"
 import { Dashboard } from "@/components/dashboard"
+import { SignedIn, SignOutButton } from "@clerk/nextjs"
 
 export type UserData = {
   username: string
@@ -105,22 +106,32 @@ export default function AgriScanApp() {
               </div>
               <h1 className="text-2xl font-bold text-foreground drop-shadow-sm">AgriScan</h1>
             </div>
-            {appState.step === 4 && !appState.showDashboard && (
-              <button
-                onClick={showDashboard}
-                className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium"
-              >
-                Dashboard
-              </button>
-            )}
-            {appState.showDashboard && (
-              <button
-                onClick={hideDashboard}
-                className="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/90 transition-colors font-medium"
-              >
-                Back to Scanner
-              </button>
-            )}
+            <div className="flex items-center gap-3">
+              {appState.step === 4 && !appState.showDashboard && (
+                <button
+                  onClick={showDashboard}
+                  className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium"
+                >
+                  Dashboard
+                </button>
+              )}
+              {appState.showDashboard && (
+                <button
+                  onClick={hideDashboard}
+                  className="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/90 transition-colors font-medium"
+                >
+                  Back to Scanner
+                </button>
+              )}
+
+              <SignedIn>
+                <SignOutButton>
+                  <button className="px-4 py-2 bg-destructive text-destructive-foreground rounded-lg hover:bg-destructive/90 transition-colors font-medium">
+                    Logout
+                  </button>
+                </SignOutButton>
+              </SignedIn>
+            </div>
           </div>
         </div>
       </header>

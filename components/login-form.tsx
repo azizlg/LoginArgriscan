@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Eye, EyeOff, LogIn, UserPlus } from "lucide-react"
-import { createClient } from "@/lib/supabase/client"
+import { useSignIn, useUser } from "@clerk/nextjs"
 import { useRouter } from "next/navigation"
 import type { UserData } from "@/app/page"
 
@@ -26,6 +26,8 @@ export function LoginForm({ onNext, onUserData, onToggleRegister }: LoginFormPro
   const [showPassword, setShowPassword] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [isLoading, setIsLoading] = useState(false)
+  const { signIn, setActive } = useSignIn()
+  const { user } = useUser()
   const router = useRouter()
 
   const validateForm = () => {
@@ -50,38 +52,55 @@ export function LoginForm({ onNext, onUserData, onToggleRegister }: LoginFormPro
     if (!validateForm()) return
 
     setIsLoading(true)
-    const supabase = createClient()
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: formData.email,
-        password: formData.password,
-      })
-
-      if (error) {
-        setErrors({ general: error.message })
+      if (!signIn) {
+        setErrors({ general: "Sign in not available" })
         return
       }
 
-      if (data.user) {
-        // Get user profile data
-        const { data: profile } = await supabase.from("profiles").select("*").eq("id", data.user.id).single()
+      const result = await signIn.create({
+        identifier: formData.email,
+        password: formData.password,
+      })
 
-        if (profile) {
-          const userData: UserData = {
-            username: profile.username,
-            email: profile.email,
-            password: formData.password,
-            gender: profile.gender || "prefer-not-to-say",
-            age: profile.age || 30,
+      if (result.status === "complete") {
+        await setActive({ session: result.createdSessionId })
+
+        // Ensure a profile exists - this will create one if it doesn't exist
+        try {
+          const response = await fetch('/api/profiles/ensure', { 
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: formData.email
+            })
+          })
+          
+          if (!response.ok) {
+            console.error('Profile ensure failed on login')
           }
-          onUserData(userData)
-          onNext()
+        } catch (e) {
+          console.error('Ensure profile on login error:', e)
         }
+        
+        // Create user data and proceed
+        const userData: UserData = {
+          username: user?.username || `user_${result.createdUserId?.slice(0, 8)}`,
+          email: formData.email,
+          password: formData.password,
+          gender: (user?.publicMetadata?.gender as string) || "prefer-not-to-say",
+          age: (user?.publicMetadata?.age as number) || 30,
+        }
+        onUserData(userData)
+        onNext()
+      } else {
+        // Handle other statuses like needs verification
+        setErrors({ general: "Login requires additional verification" })
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Login error:", error)
-      setErrors({ general: "An unexpected error occurred" })
+      setErrors({ general: error.errors?.[0]?.message || "An unexpected error occurred" })
     } finally {
       setIsLoading(false)
     }

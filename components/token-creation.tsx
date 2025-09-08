@@ -6,6 +6,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Copy, Key, Coins } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+import { useUser } from "@clerk/nextjs"
+import { createClient } from "@/lib/supabase/client"
 
 interface TokenCreationProps {
   onNext: () => void
@@ -16,23 +18,37 @@ interface TokenCreationProps {
 export function TokenCreation({ onNext, onTokenCreated, points }: TokenCreationProps) {
   const [token, setToken] = useState<string>("")
   const { toast } = useToast()
+  const { user } = useUser()
 
   useEffect(() => {
-    // Generate a fake token
-    const generateToken = () => {
-      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-      let result = "agri_"
-      for (let i = 0; i < 32; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length))
-      }
-      return result
-    }
+    const loadToken = async () => {
+      try {
+        // Ensure profile exists (idempotent)
+        await fetch('/api/profiles/ensure', { method: 'POST' })
 
-    const newToken = generateToken()
-    setToken(newToken)
-    onTokenCreated(newToken)
+        if (!user) return
+        const supabase = createClient()
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('token')
+          .eq('clerk_id', user.id)
+          .single()
+
+        if (error) {
+          console.error('Error fetching token:', error)
+          return
+        }
+        if (data?.token) {
+          setToken(data.token)
+          onTokenCreated(data.token)
+        }
+      } catch (e) {
+        console.error('Token load error:', e)
+      }
+    }
+    loadToken()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [user?.id])
 
   const copyToken = () => {
     navigator.clipboard.writeText(token)

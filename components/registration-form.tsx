@@ -1,14 +1,15 @@
 "use client"
 
 import type React from "react"
-import { EmailVerification } from "./email-verification"
+import { ClerkEmailVerification } from "./clerk-email-verification"
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { UserPlus, LogIn } from "lucide-react"
+import { UserPlus, LogIn, CheckCircle, XCircle, Loader2 } from "lucide-react"
+import { useSignUp, useUser } from "@clerk/nextjs"
 import { createClient } from "@/lib/supabase/client"
 import type { UserData } from "@/app/page"
 
@@ -30,6 +31,10 @@ export function RegistrationForm({ onNext, onUserData, onToggleLogin }: Registra
   const [isLoading, setIsLoading] = useState(false)
   const [showEmailVerification, setShowEmailVerification] = useState(false)
   const [registeredEmail, setRegisteredEmail] = useState("")
+  const [checkingUsername, setCheckingUsername] = useState(false)
+  const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(null)
+  const { signUp } = useSignUp()
+  const { isSignedIn } = useUser()
 
   const validateEmail = (email: string) => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -46,11 +51,46 @@ export function RegistrationForm({ onNext, onUserData, onToggleLogin }: Registra
     return hasUppercase && hasLowercase && hasNumber && hasSymbol && minLength
   }
 
+  const checkUsernameAvailability = async (username: string) => {
+    if (!username || username.length < 3) {
+      setUsernameAvailable(null)
+      return
+    }
+
+    setCheckingUsername(true)
+    try {
+      const response = await fetch('/api/check-username', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username })
+      })
+      const data = await response.json()
+      setUsernameAvailable(data.available)
+      if (!data.available) {
+        setErrors(prev => ({ ...prev, username: "This username is already taken" }))
+      } else {
+        setErrors(prev => {
+          const newErrors = { ...prev }
+          delete newErrors.username
+          return newErrors
+        })
+      }
+    } catch (e) {
+      console.error('Username check error:', e)
+    } finally {
+      setCheckingUsername(false)
+    }
+  }
+
   const validateForm = () => {
     const newErrors: Record<string, string> = {}
 
     if (!formData.username.trim()) {
       newErrors.username = "Username is required"
+    } else if (formData.username.length < 3) {
+      newErrors.username = "Username must be at least 3 characters"
+    } else if (usernameAvailable === false) {
+      newErrors.username = "This username is already taken"
     }
 
     if (!validateEmail(formData.email)) {
@@ -80,46 +120,78 @@ export function RegistrationForm({ onNext, onUserData, onToggleLogin }: Registra
     if (!validateForm()) return
 
     setIsLoading(true)
-    const supabase = createClient()
 
     try {
-      console.log("[v0] Starting signup process for:", formData.email)
-
-      const { data, error } = await supabase.auth.signUp({
-        email: formData.email,
-        password: formData.password,
-        options: {
-          emailRedirectTo: `${process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL || window.location.origin}/auth/callback`,
-        },
-      })
-
-      console.log("[v0] Supabase signup response data:", data)
-      console.log("[v0] Supabase signup response error:", error)
-
-      if (error) {
-        // Log full error and show serialized error to the user for debugging
-        console.error("[v0] Supabase signup error full:", error)
-        if ((error.message || "").includes("already registered")) {
-          setErrors({ general: "An account with this email already exists. Please try signing in instead." })
-        } else {
-          setErrors({ general: JSON.stringify(error) })
-        }
+      if (isSignedIn) {
+        setErrors({ general: "You're already signed in. Please log out before creating a new account." })
         return
       }
 
-      if (data?.user) {
-        console.log("[v0] User created successfully, user ID:", data.user.id)
-        console.log("[v0] Email confirmation required:", !data.user.email_confirmed_at)
+      if (!signUp) {
+        setErrors({ general: "Sign up not available" })
+        return
+      }
+
+      console.log("[v0] Starting Clerk signup process for:", formData.email)
+
+      const result = await signUp.create({
+        emailAddress: formData.email,
+        password: formData.password,
+        username: formData.username,
+      })
+
+      // Add metadata to the user
+      await signUp.update({
+        unsafeMetadata: {
+          gender: formData.gender,
+          age: Number.parseInt(formData.age),
+        }
+      })
+
+      console.log("[v0] Clerk signup response:", result)
+
+      if (result.status === "missing_requirements") {
+        // Need email verification
+        await signUp.prepareEmailAddressVerification({ strategy: "email_code" })
         setRegisteredEmail(formData.email)
         setShowEmailVerification(true)
-      } else {
-        // Unexpected empty response
-        console.warn('[v0] Signup returned no user and no error', { data })
-        setErrors({ general: JSON.stringify({ data, message: 'No user returned from signup' }) })
+      } else if (result.status === "complete") {
+        // Registration is complete, no verification needed
+        const userData: UserData = {
+          username: formData.username,
+          email: formData.email,
+          password: formData.password,
+          gender: formData.gender,
+          age: Number.parseInt(formData.age),
+        }
+        onUserData(userData)
+        onNext()
       }
-    } catch (error) {
-      console.error("[v0] Registration error:", error)
-      setErrors({ general: "An unexpected error occurred during registration. Please try again." })
+    } catch (error: any) {
+      console.error("[v0] Clerk registration error:", error)
+      if (error.errors?.[0]?.code === "form_identifier_exists") {
+        // Check if the user has a profile in our database
+        const supabase = createClient()
+        const { data: existingProfile } = await supabase
+          .from("profiles")
+          .select("id")
+          .eq("email", formData.email)
+          .maybeSingle()
+        
+        if (existingProfile) {
+          // User has a profile, they should sign in
+          setErrors({ general: "You already have an account. Please sign in instead." })
+          onToggleLogin()
+        } else {
+          // User exists in Clerk but not in profiles - they may have signed up but not completed verification
+          setErrors({ general: "This email is already registered but profile setup is incomplete. Please sign in to complete your profile." })
+          onToggleLogin()
+        }
+      } else if (error.errors?.[0]?.code === "session_exists") {
+        setErrors({ general: "You're already signed in. Please log out before creating a new account." })
+      } else {
+        setErrors({ general: error.errors?.[0]?.message || "An unexpected error occurred during registration. Please try again." })
+      }
     } finally {
       setIsLoading(false)
     }
@@ -144,7 +216,7 @@ export function RegistrationForm({ onNext, onUserData, onToggleLogin }: Registra
 
   if (showEmailVerification) {
     return (
-      <EmailVerification
+      <ClerkEmailVerification
         email={registeredEmail}
         onVerified={handleEmailVerified}
         onBack={handleBackFromVerification}
@@ -177,16 +249,40 @@ export function RegistrationForm({ onNext, onUserData, onToggleLogin }: Registra
               <Label htmlFor="username" className="text-foreground font-medium">
                 Username
               </Label>
-              <Input
-                id="username"
-                type="text"
-                value={formData.username}
-                onChange={(e) => setFormData((prev) => ({ ...prev, username: e.target.value }))}
-                className={`glass-input h-12 text-foreground placeholder:text-muted-foreground ${errors.username ? "border-destructive" : ""}`}
-                placeholder="Enter your username"
-                disabled={isLoading}
-              />
+              <div className="relative">
+                <Input
+                  id="username"
+                  type="text"
+                  value={formData.username}
+                  onChange={(e) => {
+                    setFormData((prev) => ({ ...prev, username: e.target.value }))
+                    // Check username availability after user stops typing
+                    const timer = setTimeout(() => {
+                      checkUsernameAvailability(e.target.value)
+                    }, 500)
+                    return () => clearTimeout(timer)
+                  }}
+                  className={`glass-input h-12 pr-10 text-foreground placeholder:text-muted-foreground ${
+                    errors.username ? "border-destructive" : 
+                    usernameAvailable === true ? "border-green-500" : ""
+                  }`}
+                  placeholder="Enter your username"
+                  disabled={isLoading}
+                />
+                {checkingUsername && (
+                  <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
+                )}
+                {!checkingUsername && usernameAvailable === true && formData.username.length >= 3 && (
+                  <CheckCircle className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-green-500" />
+                )}
+                {!checkingUsername && usernameAvailable === false && (
+                  <XCircle className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-destructive" />
+                )}
+              </div>
               {errors.username && <p className="text-sm text-destructive">{errors.username}</p>}
+              {!errors.username && usernameAvailable === true && (
+                <p className="text-sm text-green-500">Username is available!</p>
+              )}
             </div>
 
             <div className="space-y-2">
