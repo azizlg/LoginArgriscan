@@ -51,7 +51,7 @@ export function MapView({ results }: MapViewProps) {
   useEffect(() => {
     // Dynamically import Leaflet to avoid SSR issues
     const initMap = async () => {
-      if (typeof window === "undefined" || !userLocation) return
+      if (typeof window === "undefined" || !userLocation || !mapRef.current) return
 
       const L = (await import("leaflet")).default
 
@@ -64,7 +64,8 @@ export function MapView({ results }: MapViewProps) {
       })
 
       if (mapRef.current && !mapInstanceRef.current) {
-        mapInstanceRef.current = L.map(mapRef.current).setView([userLocation.lat, userLocation.lng], 15)
+        try {
+          mapInstanceRef.current = L.map(mapRef.current).setView([userLocation.lat, userLocation.lng], 15)
 
         // Add tile layer
         L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -90,6 +91,10 @@ export function MapView({ results }: MapViewProps) {
         L.marker([userLocation.lat, userLocation.lng], { icon: userIcon })
           .bindPopup("<strong>Your Location</strong>")
           .addTo(mapInstanceRef.current)
+        } catch (mapError) {
+          console.error('Error initializing map:', mapError)
+          mapInstanceRef.current = null
+        }
       }
     }
 
@@ -119,7 +124,9 @@ export function MapView({ results }: MapViewProps) {
 
       // Clear existing markers
       markersRef.current.forEach((marker) => {
-        mapInstanceRef.current.removeLayer(marker)
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.removeLayer(marker)
+        }
       })
       markersRef.current = []
 
@@ -166,13 +173,15 @@ export function MapView({ results }: MapViewProps) {
               <small>${result.timestamp.toLocaleString()}</small>
             </div>
           `)
-          .addTo(mapInstanceRef.current)
-
-        markersRef.current.push(marker)
+        
+        if (mapInstanceRef.current) {
+          marker.addTo(mapInstanceRef.current)
+          markersRef.current.push(marker)
+        }
       })
 
       // Fit map to show all markers if there are any
-      if (results.length > 0) {
+      if (results.length > 0 && markersRef.current.length > 0 && mapInstanceRef.current) {
         const group = L.featureGroup(markersRef.current)
         mapInstanceRef.current.fitBounds(group.getBounds().pad(0.1))
       }

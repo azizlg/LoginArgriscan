@@ -70,28 +70,60 @@ export async function createScan(scanData: {
   treatment?: string
   location?: string
   points_used?: number
+  species?: string
+  disease?: string
+  species_confidence?: number
+  disease_confidence?: number
+  ai_response?: string
 }) {
   const supabase = await createSupabaseClient()
   
+  console.log('createScan called with clerk_id:', scanData.user_id)
+  
   // Get the profile id from clerk_id
-  const { data: profile } = await supabase
+  const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("id")
     .eq("clerk_id", scanData.user_id)
     .single()
 
+  if (profileError) {
+    console.error('Error finding profile:', profileError)
+    return { data: null, error: { message: `Profile lookup failed: ${profileError.message}` } }
+  }
+
   if (!profile) {
+    console.error('No profile found for clerk_id:', scanData.user_id)
     return { data: null, error: { message: "Profile not found" } }
   }
 
+  console.log('Found profile with id:', profile.id)
+  
+  // Prepare the data for insertion
+  const insertData = {
+    ...scanData,
+    user_id: profile.id  // Use the profile UUID instead of clerk_id
+  }
+  
+  console.log('Inserting scan data:', {
+    user_id: insertData.user_id,
+    species: insertData.species,
+    disease: insertData.disease,
+    confidence: insertData.confidence,
+    result: insertData.result
+  })
+
   const { data, error } = await supabase
     .from("scans")
-    .insert({
-      ...scanData,
-      user_id: profile.id  // Use the profile UUID instead of clerk_id
-    })
+    .insert(insertData)
     .select()
     .single()
+
+  if (error) {
+    console.error('Database insertion error:', error)
+  } else {
+    console.log('Scan successfully stored with id:', data?.id)
+  }
 
   return { data, error }
 }
